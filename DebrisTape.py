@@ -10,6 +10,7 @@ import board
 import busio
 import digitalio
 from adafruit_mcp230xx.mcp23017 import MCP23017
+from w1thermsensor import W1ThermSensor   # Easy use of 1-Wire temperature sensors
 
 # ======================================================
 class DebrisTape(Device):
@@ -25,6 +26,27 @@ class DebrisTape(Device):
     limitR = attribute(
         dtype="bool",
         label="Limit right",
+        access=AttrWriteType.READ,
+        display_level=DispLevel.OPERATOR,
+    )
+    
+    motorL_temperature = attribute(
+        dtype="float",
+        label="Motor L temperature",
+        access=AttrWriteType.READ,
+        display_level=DispLevel.OPERATOR,
+    )
+    
+    motorD_temperature = attribute(
+        dtype="float",
+        label="Motor D temperature",
+        access=AttrWriteType.READ,
+        display_level=DispLevel.OPERATOR,
+    )
+    
+    motorR_temperature = attribute(
+        dtype="float",
+        label="Motor R temperature",
         access=AttrWriteType.READ,
         display_level=DispLevel.OPERATOR,
     )
@@ -54,7 +76,9 @@ class DebrisTape(Device):
     __autoReverse = True
     __limitR = False
     __limitL = False
-    
+    __motorR_temperature = 999.99
+    __motorD_temperature = 999.99
+    __motorL_temperature = 999.99
     
     # Commands:
     
@@ -70,7 +94,7 @@ class DebrisTape(Device):
         
         self.velocity_pull = 1
         
-        self.velocity_break = 0.05
+        self.velocity_break = 0
         self.velocity_tension = 1
         self.debug_stream('Device has done the init.')
         
@@ -117,11 +141,11 @@ class DebrisTape(Device):
         if self.__direction: # Right => Left
             self.motorL.throttle = -self.velocity_tension
             self.motorD.throttle = +self.velocity_pull
-            self.motorR.throttle = +self.velocity_break
+            self.motorR.throttle = -self.velocity_break
         else: # Left => Right
             self.motorL.throttle = +self.velocity_break
             self.motorD.throttle = -self.velocity_pull
-            self.motorR.throttle = -self.velocity_tension
+            self.motorR.throttle = +self.velocity_tension
 
     @command
     def stop_all(self):
@@ -141,6 +165,15 @@ class DebrisTape(Device):
     def read_limitR(self):
         return self.__limitR
     
+    def read_motorL_temperature(self):
+        return self.__motorL_temperature
+    
+    def read_motorD_temperature(self):
+        return self.__motorD_temperature
+    
+    def read_motorR_temperature(self):
+        return self.__motorR_temperature
+    
     def read_loops(self):
         return self.__loops
     
@@ -155,26 +188,28 @@ class DebrisTape(Device):
         else:
             self.__direction = value
         
-        
-        
     def read_autoReverse(self):
         return self.__autoReverse
     
     def write_autoReverse(self, value):
         self.__autoReverse = value
     
-    @command
-    def always_executed_hook(self):
+    @command(polling_period = 1000)
+    def monitor_switches(self):
         #t1 = time.time()
         
         self.__limitL = self.switchL.value
         self.__limitR = self.switchR.value
+        self.debug_stream(str(self.__limitL))
+        self.debug_stream(str(self.__limitR))
+        
         
         if self.__limitL and self.__limitR:
             self.stop_all()
             self.warn_stream('Both limit_switches are active! Something is broken! Init or start_all to continue.')
             self.set_state(DevState.FAULT)
-            
+        
+        
         else:
             if self.get_state() == DevState.MOVING:
                 if (self.__direction and self.__limitL) or (not self.__direction and self.__limitR):
@@ -188,8 +223,19 @@ class DebrisTape(Device):
                         #t1 = t2
                         self.start_all()
                     else:
-                        self.stop_all()       
- 
+                        self.stop_all()
+                        self.set_state(DevState.ALARM)
+                        
+    @command(polling_period = 10000)
+    def monitor_temperature(self):                
+        self.__motorR_temperature  = W1ThermSensor(40, "3c01d607b685").get_temperature()
+        self.debug_stream(str(self.__motorR_temperature))
+        self.__motorD_temperature  = W1ThermSensor(40, "3c01d6077e70").get_temperature()
+        self.debug_stream(str(self.__motorD_temperature))
+        self.__motorL_temperature  = W1ThermSensor(40, '3c01d6072740').get_temperature()
+        self.debug_stream(str(self.__motorL_temperature))
+        if self.__motorR_temperature > 40 or self.__motorD_temperature > 40 or self.__motorL_temperature > 40:
+            self.set_state(DevState.ALARM)
 
 if __name__ == "__main__":
     DebrisTape.run_server()
