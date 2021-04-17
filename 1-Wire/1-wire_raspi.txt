@@ -1,0 +1,54 @@
+Konfiguration und Inbetriebnahme Temperatur-Sensor DS18b20 (Dallas)
+----------------------------------------------------------------------
+
+Installation:
+-------------
+
+$ sudo raspi-config
+
+Hier wird der 1-Wire-Sensor enabled.
+
+Beim Speichern wird wird in "/boot/config.txt"
+am Ende der Datei folgenden Zeile eingetragen:
+
+# 1-Wire Temperatursensor
+dtoverlay=w1-gpio
+
+$ sudo reboot
+
+Nach dem Booten sollte das Device zu sehen sehen:
+
+$ ls /sys/devices/w1_bus_master1
+
+Dort sind die angeschlossenen Sensoren zu finden. Für jeden Sensor erscheint eni Verzeichnis wie z. Bsp.:
+
+$ /sys/devices/w1_bus_master1/28-3c01d6077e70
+
+Jeder Sensor hat eine eigene Kennung. Diese spiegelt sich im Verzeichnisnamen wider.
+In diesem Verzeichnis steht in der Datei: "temperature" der aktuelle 100fache Wert der Temperatur.
+
+Zum Auslesen unter Python braucht man keine extra Bibliothek. Jedoch vereinfacht sich der Zugriff
+und das Handling auf mehrer Sensoren damit.
+
+
+Installation der Python-Lib:
+-----------------------------
+
+Unter https://pypi.org/project/w1thermsensor/ befinden sich weitere informationen zur Bibliothek.
+
+$ sudo apt-get install python3-w1thermsensor
+
+Ein kleines Python-Schnippsel zeigt uns die 3 angeschlossene Sensoren:
+
+********************************************
+from w1thermsensor import W1ThermSensor
+
+for sensor in W1ThermSensor.get_available_sensors():
+    print("Sensor %s has temperature %.2f" % (sensor.id, sensor.get_temperature()))
+*********************************************
+
+>>> %Run thermo_DS18B.py
+
+Sensor 3c01d607b685 has temperature 23.81
+Sensor 3c01d6077e70 has temperature 22.88
+Sensor 3c01d6072740 has temperature 16.25
