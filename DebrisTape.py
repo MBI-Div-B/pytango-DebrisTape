@@ -73,7 +73,7 @@ class DebrisTape(Device):
     )
 
     __direction = 0
-    __autoReverse = True
+    __autoReverse = False
     __limitR = False
     __limitL = False
     __motorR_temperature = 999.99
@@ -194,7 +194,7 @@ class DebrisTape(Device):
     def write_autoReverse(self, value):
         self.__autoReverse = value
     
-    @command(polling_period = 1000)
+    @command(polling_period = 500)
     def monitor_switches(self):
         #t1 = time.time()
         
@@ -227,16 +227,40 @@ class DebrisTape(Device):
                         self.set_state(DevState.ALARM)
                         
     @command(polling_period = 10000)
-    def monitor_temperature(self):                
-        self.__motorR_temperature  = W1ThermSensor(40, "3c01d607b685").get_temperature()
-        self.debug_stream(str(self.__motorR_temperature))
-        self.__motorD_temperature  = W1ThermSensor(40, "3c01d6077e70").get_temperature()
-        self.debug_stream(str(self.__motorD_temperature))
-        self.__motorL_temperature  = W1ThermSensor(40, '3c01d6072740').get_temperature()
-        self.debug_stream(str(self.__motorL_temperature))
+    def monitor_temperature(self):
+        try:
+            self.__motorR_temperature  = W1ThermSensor(40, "3c01d607b685").get_temperature()
+            self.debug_stream(str(self.__motorR_temperature))
+        except:
+            self.__motorR_temperature  = 0
+            self.debug_stream('Could not get temperature of right motor.')
+            
+            
+        try:
+            self.__motorD_temperature  = W1ThermSensor(40, "3c01d6077e70").get_temperature()
+            self.debug_stream(str(self.__motorD_temperature))
+        except:
+            self.__motorD_temperature  = 0
+            self.debug_stream('Could not get temperature of driver motor.')
+            
+            
+        try:
+            self.__motorL_temperature  = W1ThermSensor(40, '3c01d6072740').get_temperature()
+            self.debug_stream(str(self.__motorL_temperature))
+        except:
+            self.__motorL_temperature  = 0
+            self.debug_stream('Could not get temperature of left motor.')
+            
+            
         if self.__motorR_temperature > 40 or self.__motorD_temperature > 40 or self.__motorL_temperature > 40:
             self.set_state(DevState.ALARM)
 
+
+    @command()
+    def clear_state(self):
+        self.set_state(DevState.ON)
+        
+        
 if __name__ == "__main__":
     DebrisTape.run_server()
 
