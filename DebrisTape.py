@@ -51,6 +51,8 @@ class DebrisTape(Device):
         label="Loops since reset / restart",
         access=AttrWriteType.READ,
         display_level=DispLevel.OPERATOR,
+        memorized=True,
+        hw_memorized=True,
     )
     
     direction = attribute(
@@ -87,16 +89,7 @@ class DebrisTape(Device):
             self.error_stream('Could not connect to Motor Devices')
             self.set_state(DevState.FAULT)
         
-        self.stop_all()
-        
-        self.velocity_pull = 1
-        
-        self.velocity_break = 0
-        self.velocity_tension = 1
-        self.debug_stream('Device has done the init.')
-        
-        self.__loops = 0 # 2do: Should store the value on disk and only reset it manually if tape is replaced!
-        
+        self.stop_all()               
     
     @command
     def delete_device(self):
@@ -107,29 +100,28 @@ class DebrisTape(Device):
     def start_all(self):
         """Direction ==>  0:L=>R, 1:R=>L
         
-        # for break & tensions motors:
-            # positive throttle = dispense tape
-            # negative throttle = collect  tape
+        
+        motor_left pulls with positive jog
+        motor_right pulls with negative jog
         
         # for driver motor:
             # positive throttle = move in positive direction
         """
         self.set_state(DevState.MOVING)
         if self.__direction: # Right => Left
-            self.motorL.throttle = -self.velocity_tension
-            self.motorD.throttle = +self.velocity_pull
-            self.motorR.throttle = -self.velocity_break
+            #self.motorL.throttle = -self.velocity_tension
+            #self.motorR.throttle = -self.velocity_break
+            pass
         else: # Left => Right
-            self.motorL.throttle = +self.velocity_break
-            self.motorD.throttle = -self.velocity_pull
-            self.motorR.throttle = +self.velocity_tension
+            pass
+            # self.motorL.throttle = +self.velocity_break
+            # self.motorR.throttle = +self.velocity_tension
 
     @command
     def stop_all(self):
         self.set_state(DevState.ON)
-        self.motorL.throttle = 0
-        self.motorD.throttle = 0
-        self.motorR.throttle = 0
+        self.motor_left.stop()
+        self.motor_right.stop()
     
     @command
     def reset_loops(self):
@@ -143,13 +135,10 @@ class DebrisTape(Device):
         return self.__limitR
     
     def read_motorL_temperature(self):
-        return self.__motorL_temperature
-    
-    def read_motorD_temperature(self):
-        return self.__motorD_temperature
+        return -1
     
     def read_motorR_temperature(self):
-        return self.__motorR_temperature
+        return -1
     
     def read_loops(self):
         return self.__loops
@@ -157,8 +146,7 @@ class DebrisTape(Device):
     def read_direction(self):
         return self.__direction
     
-    def write_direction(self, value):
-        
+    def write_direction(self, value):        
         if self.get_state() == DevState.MOVING:
             self.__direction = value
             self.start_all()
@@ -175,15 +163,15 @@ class DebrisTape(Device):
     def monitor_switches(self):
         #t1 = time.time()
         
-        self.__limitL = self.switchL.value
-        self.__limitR = self.switchR.value
+        self.__limitL = self.motor_left.hw_limit_minus
         self.debug_stream(str(self.__limitL))
-        self.debug_stream(str(self.__limitR))
-        
+        self.__limitR = self.motor_right.hw_limit_minus
+        self.debug_stream(str(self.__limitR))        
         
         if self.__limitL and self.__limitR:
             self.stop_all()
-            self.warn_stream('Both limit_switches are active! Something is broken! Init or start_all to continue.')
+            self.warn_stream('Both limit_switches are active!'
+                             'Something is broken! Init or start_all to continue.')
             self.set_state(DevState.FAULT)
         
         
@@ -193,45 +181,28 @@ class DebrisTape(Device):
                     self.__loops += 1
                     if self.__autoReverse:
                         self.__direction = not self.__direction
-                        
-                        #t2 = time.time()
-                        #print("current round trips: {:d} "
-                        #      "with duration {:f} min".format(self.round_trips, (t2-t1)/60))
-                        #t1 = t2
                         self.start_all()
                     else:
                         self.stop_all()
                         self.set_state(DevState.ALARM)
                         
-    @command(polling_period = 10000)
+    @command() #polling_period = 10000)
     def monitor_temperature(self):
         try:
             self.__motorR_temperature  = W1ThermSensor(40, "3c01d607b685").get_temperature()
             self.debug_stream(str(self.__motorR_temperature))
         except:
             self.__motorR_temperature  = 0
-            self.debug_stream('Could not get temperature of right motor.')
-            
-            
-        try:
-            self.__motorD_temperature  = W1ThermSensor(40, "3c01d6077e70").get_temperature()
-            self.debug_stream(str(self.__motorD_temperature))
-        except:
-            self.__motorD_temperature  = 0
-            self.debug_stream('Could not get temperature of driver motor.')
-            
-            
+            self.debug_stream('Could not get temperature of right motor.')          
         try:
             self.__motorL_temperature  = W1ThermSensor(40, '3c01d6072740').get_temperature()
             self.debug_stream(str(self.__motorL_temperature))
         except:
             self.__motorL_temperature  = 0
-            self.debug_stream('Could not get temperature of left motor.')
-            
+            self.debug_stream('Could not get temperature of left motor.')            
             
         if self.__motorR_temperature > 40 or self.__motorD_temperature > 40 or self.__motorL_temperature > 40:
             self.set_state(DevState.ALARM)
-
 
     @command()
     def clear_state(self):
@@ -240,4 +211,3 @@ class DebrisTape(Device):
         
 if __name__ == "__main__":
     DebrisTape.run_server()
-
