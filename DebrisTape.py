@@ -2,18 +2,20 @@
 from tango import Database, DevFailed, AttrWriteType, DevState, DeviceProxy, DispLevel
 from tango.server import device_property
 from tango.server import Device, attribute, command
-import sys
-from enum import IntEnum
 import time
-from adafruit_motorkit import MotorKit
-import board
-import busio
-import digitalio
-from adafruit_mcp230xx.mcp23017 import MCP23017
 from w1thermsensor import W1ThermSensor   # Easy use of 1-Wire temperature sensors
 
 # ======================================================
 class DebrisTape(Device):
+    
+    MotorLDevice = device_property(
+        dtype="str", default_value="/domain/family/member"
+    )
+    
+    MotorRDevice = device_property(
+        dtype="str", default_value="/domain/family/member"
+    )
+    
     # device attributes
    
     limitL = attribute(
@@ -36,14 +38,7 @@ class DebrisTape(Device):
         access=AttrWriteType.READ,
         display_level=DispLevel.OPERATOR,
     )
-    
-    motorD_temperature = attribute(
-        dtype="float",
-        label="Motor D temperature",
-        access=AttrWriteType.READ,
-        display_level=DispLevel.OPERATOR,
-    )
-    
+        
     motorR_temperature = attribute(
         dtype="float",
         label="Motor R temperature",
@@ -77,20 +72,22 @@ class DebrisTape(Device):
     __limitR = False
     __limitL = False
     __motorR_temperature = 999.99
-    __motorD_temperature = 999.99
     __motorL_temperature = 999.99
     
-    # Commands:
-    
-    @command
     def init_device(self):
         self.set_state(DevState.OFF)
         super().init_device()
         self.info_stream("init_device()")
-        self.open()
+        
+        try:
+            self.motor_left = DeviceProxy(self.MotorLDevice)
+            self.motor_right = DeviceProxy(self.MotorRDevice)        
+            self.set_state(DevState.ON)
+        except:
+            self.error_stream('Could not connect to Motor Devices')
+            self.set_state(DevState.FAULT)
         
         self.stop_all()
-        self.info_stream('All motors have been stopped!')
         
         self.velocity_pull = 1
         
@@ -104,27 +101,7 @@ class DebrisTape(Device):
     @command
     def delete_device(self):
         self.stop_all()
-        self.set_state(DevState.OFF)
-        
-    @command
-    def open(self):
-        self.kit = MotorKit()
-        self.i2c = busio.I2C(board.SCL, board.SDA)        
-        self.mcp = MCP23017(self.i2c) # MCP23017
-        
-        self.motorL = self.kit.motor1   #Break / Tension motor on the Left
-        self.motorR = self.kit.motor3   #Break / Tension motor on the Right
-        self.motorD = self.kit.motor2   #Driver motor
-        
-        self.switchR = self.mcp.get_pin(0) # GPA0
-        self.switchL = self.mcp.get_pin(1) # GPA1
-
-        self.switchR.direction = digitalio.Direction.INPUT
-        self.switchR.pull = digitalio.Pull.UP
-        
-        self.switchL.direction = digitalio.Direction.INPUT
-        self.switchL.pull = digitalio.Pull.UP
-        self.set_state(DevState.ON)
+        self.set_state(DevState.OFF)        
     
     @command
     def start_all(self):
