@@ -51,8 +51,6 @@ class DebrisTape(Device):
         label="Loops since reset / restart",
         access=AttrWriteType.READ,
         display_level=DispLevel.OPERATOR,
-        memorized=True,
-        hw_memorized=True,
     )
     
     direction = attribute(
@@ -60,17 +58,29 @@ class DebrisTape(Device):
         label="Direction. 0:L=>R, 1:R=>L",
         access=AttrWriteType.READ_WRITE,
         display_level=DispLevel.EXPERT,
+        memorized=True,
+        hw_memorized=True,        
     )
     
     autoReverse = attribute(
         dtype="bool",
-        label="Auto Reverse?",  # make default value = True! How do i do this here already?
+        label="Auto Reverse?",
         access=AttrWriteType.READ_WRITE,
         display_level=DispLevel.EXPERT,
+        memorized=True,
+        hw_memorized=True,
+    )
+    
+    velocity = attribute(
+        dtype="int",
+        label="Velocity",
+        access=AttrWriteType.READ_WRITE,
+        display_level=DispLevel.EXPERT,
+        unit="Hz",
+        memorized=True,
+        hw_memorized=True,
     )
 
-    __direction = 0
-    __autoReverse = False
     __limitR = False
     __limitL = False
     __motorR_temperature = 999.99
@@ -83,13 +93,20 @@ class DebrisTape(Device):
         
         try:
             self.motor_left = DeviceProxy(self.MotorLDevice)
-            self.motor_right = DeviceProxy(self.MotorRDevice)        
-            self.set_state(DevState.ON)
+            self.info_stream('Connected to Motor Devices: {:s}'.format(self.MotorLDevice))
         except:
-            self.error_stream('Could not connect to Motor Devices')
+            self.error_stream('Could not connect to Motor Devices: {:s}'.format(self.MotorLDevice))
+            self.set_state(DevState.FAULT)
+            
+        try:
+            self.motor_right = DeviceProxy(self.MotorRDevice)
+            self.info_stream('Connected to Motor Devices: {:s}'.format(self.MotorRDevice))
+        except:
+            self.error_stream('Could not connect to Motor Devices: {:s}'.format(self.MotorRDevice))
             self.set_state(DevState.FAULT)
         
-        self.stop_all()               
+        self.stop_all()
+        self.__loops = 0
     
     @command
     def delete_device(self):
@@ -109,13 +126,14 @@ class DebrisTape(Device):
         """
         self.set_state(DevState.MOVING)
         if self.__direction: # Right => Left
-            #self.motorL.throttle = -self.velocity_tension
-            #self.motorR.throttle = -self.velocity_break
+            self.motor_right.stop()
+            self.motor_left.velocity = self.__velocity
+            self.motor_left.jog_plus()
             pass
         else: # Left => Right
-            pass
-            # self.motorL.throttle = +self.velocity_break
-            # self.motorR.throttle = +self.velocity_tension
+            self.motor_left.stop()
+            self.motor_right.velocity = self.__velocity
+            self.motor_right.jog_minus()
 
     @command
     def stop_all(self):
@@ -158,11 +176,15 @@ class DebrisTape(Device):
     
     def write_autoReverse(self, value):
         self.__autoReverse = value
+        
+    def read_velocity(self):
+        return self.__velocity
+    
+    def write_velocity(self, value):
+        self.__velocity = value
     
     @command(polling_period = 500)
-    def monitor_switches(self):
-        #t1 = time.time()
-        
+    def monitor_switches(self):        
         self.__limitL = self.motor_left.hw_limit_minus
         self.debug_stream(str(self.__limitL))
         self.__limitR = self.motor_right.hw_limit_minus
@@ -172,8 +194,7 @@ class DebrisTape(Device):
             self.stop_all()
             self.warn_stream('Both limit_switches are active!'
                              'Something is broken! Init or start_all to continue.')
-            self.set_state(DevState.FAULT)
-        
+            self.set_state(DevState.FAULT)        
         
         else:
             if self.get_state() == DevState.MOVING:
