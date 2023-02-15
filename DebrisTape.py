@@ -108,7 +108,7 @@ class DebrisTape(Device):
         self.stop_all()
         self.__loops = 0
     
-    @command
+    
     def delete_device(self):
         self.stop_all()
         self.set_state(DevState.OFF)        
@@ -232,7 +232,7 @@ class DebrisTape(Device):
 
     @command()
     def new_tape_inserted(self):
-        if
+        self.__loops = 0
 
         
         
