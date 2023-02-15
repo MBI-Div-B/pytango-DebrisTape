@@ -2,18 +2,20 @@
 from tango import Database, DevFailed, AttrWriteType, DevState, DeviceProxy, DispLevel
 from tango.server import device_property
 from tango.server import Device, attribute, command
-import sys
-from enum import IntEnum
 import time
-from adafruit_motorkit import MotorKit
-import board
-import busio
-import digitalio
-from adafruit_mcp230xx.mcp23017 import MCP23017
 from w1thermsensor import W1ThermSensor   # Easy use of 1-Wire temperature sensors
 
 # ======================================================
 class DebrisTape(Device):
+    
+    MotorLDevice = device_property(
+        dtype="str", default_value="/domain/family/member"
+    )
+    
+    MotorRDevice = device_property(
+        dtype="str", default_value="/domain/family/member"
+    )
+    
     # device attributes
    
     limitL = attribute(
@@ -36,14 +38,7 @@ class DebrisTape(Device):
         access=AttrWriteType.READ,
         display_level=DispLevel.OPERATOR,
     )
-    
-    motorD_temperature = attribute(
-        dtype="float",
-        label="Motor D temperature",
-        access=AttrWriteType.READ,
-        display_level=DispLevel.OPERATOR,
-    )
-    
+        
     motorR_temperature = attribute(
         dtype="float",
         label="Motor R temperature",
@@ -63,96 +58,88 @@ class DebrisTape(Device):
         label="Direction. 0:L=>R, 1:R=>L",
         access=AttrWriteType.READ_WRITE,
         display_level=DispLevel.EXPERT,
+        memorized=True,
+        hw_memorized=True,        
     )
     
     autoReverse = attribute(
         dtype="bool",
-        label="Auto Reverse?",  # make default value = True! How do i do this here already?
+        label="Auto Reverse?",
         access=AttrWriteType.READ_WRITE,
         display_level=DispLevel.EXPERT,
+        memorized=True,
+        hw_memorized=True,
+    )
+    
+    velocity = attribute(
+        dtype="int",
+        label="Velocity",
+        access=AttrWriteType.READ_WRITE,
+        display_level=DispLevel.EXPERT,
+        unit="Hz",
+        memorized=True,
+        hw_memorized=True,
     )
 
-    __direction = 0
-    __autoReverse = False
     __limitR = False
     __limitL = False
     __motorR_temperature = 999.99
-    __motorD_temperature = 999.99
     __motorL_temperature = 999.99
     
-    # Commands:
-    
-    @command
     def init_device(self):
         self.set_state(DevState.OFF)
         super().init_device()
         self.info_stream("init_device()")
-        self.open()
+        
+        try:
+            self.motor_left = DeviceProxy(self.MotorLDevice)
+            self.info_stream('Connected to Motor Devices: {:s}'.format(self.MotorLDevice))
+        except:
+            self.error_stream('Could not connect to Motor Devices: {:s}'.format(self.MotorLDevice))
+            self.set_state(DevState.FAULT)
+            
+        try:
+            self.motor_right = DeviceProxy(self.MotorRDevice)
+            self.info_stream('Connected to Motor Devices: {:s}'.format(self.MotorRDevice))
+        except:
+            self.error_stream('Could not connect to Motor Devices: {:s}'.format(self.MotorRDevice))
+            self.set_state(DevState.FAULT)
         
         self.stop_all()
-        self.info_stream('All motors have been stopped!')
-        
-        self.velocity_pull = 1
-        
-        self.velocity_break = 0
-        self.velocity_tension = 1
-        self.debug_stream('Device has done the init.')
-        
-        self.__loops = 0 # 2do: Should store the value on disk and only reset it manually if tape is replaced!
-        
+        self.__loops = 0
     
     @command
     def delete_device(self):
         self.stop_all()
-        self.set_state(DevState.OFF)
-        
-    @command
-    def open(self):
-        self.kit = MotorKit()
-        self.i2c = busio.I2C(board.SCL, board.SDA)        
-        self.mcp = MCP23017(self.i2c) # MCP23017
-        
-        self.motorL = self.kit.motor1   #Break / Tension motor on the Left
-        self.motorR = self.kit.motor3   #Break / Tension motor on the Right
-        self.motorD = self.kit.motor2   #Driver motor
-        
-        self.switchR = self.mcp.get_pin(0) # GPA0
-        self.switchL = self.mcp.get_pin(1) # GPA1
-
-        self.switchR.direction = digitalio.Direction.INPUT
-        self.switchR.pull = digitalio.Pull.UP
-        
-        self.switchL.direction = digitalio.Direction.INPUT
-        self.switchL.pull = digitalio.Pull.UP
-        self.set_state(DevState.ON)
+        self.set_state(DevState.OFF)        
     
     @command
     def start_all(self):
         """Direction ==>  0:L=>R, 1:R=>L
         
-        # for break & tensions motors:
-            # positive throttle = dispense tape
-            # negative throttle = collect  tape
+        
+        motor_left pulls with positive jog
+        motor_right pulls with negative jog
         
         # for driver motor:
             # positive throttle = move in positive direction
         """
         self.set_state(DevState.MOVING)
         if self.__direction: # Right => Left
-            self.motorL.throttle = -self.velocity_tension
-            self.motorD.throttle = +self.velocity_pull
-            self.motorR.throttle = -self.velocity_break
+            self.motor_right.stop()
+            self.motor_left.velocity = self.__velocity
+            self.motor_left.jog_plus()
+            pass
         else: # Left => Right
-            self.motorL.throttle = +self.velocity_break
-            self.motorD.throttle = -self.velocity_pull
-            self.motorR.throttle = +self.velocity_tension
+            self.motor_left.stop()
+            self.motor_right.velocity = self.__velocity
+            self.motor_right.jog_minus()
 
     @command
     def stop_all(self):
         self.set_state(DevState.ON)
-        self.motorL.throttle = 0
-        self.motorD.throttle = 0
-        self.motorR.throttle = 0
+        self.motor_left.stop()
+        self.motor_right.stop()
     
     @command
     def reset_loops(self):
@@ -166,13 +153,10 @@ class DebrisTape(Device):
         return self.__limitR
     
     def read_motorL_temperature(self):
-        return self.__motorL_temperature
-    
-    def read_motorD_temperature(self):
-        return self.__motorD_temperature
+        return -1
     
     def read_motorR_temperature(self):
-        return self.__motorR_temperature
+        return -1
     
     def read_loops(self):
         return self.__loops
@@ -180,8 +164,7 @@ class DebrisTape(Device):
     def read_direction(self):
         return self.__direction
     
-    def write_direction(self, value):
-        
+    def write_direction(self, value):        
         if self.get_state() == DevState.MOVING:
             self.__direction = value
             self.start_all()
@@ -193,22 +176,25 @@ class DebrisTape(Device):
     
     def write_autoReverse(self, value):
         self.__autoReverse = value
+        
+    def read_velocity(self):
+        return self.__velocity
+    
+    def write_velocity(self, value):
+        self.__velocity = value
     
     @command(polling_period = 500)
-    def monitor_switches(self):
-        #t1 = time.time()
-        
-        self.__limitL = self.switchL.value
-        self.__limitR = self.switchR.value
+    def monitor_switches(self):        
+        self.__limitL = self.motor_left.hw_limit_minus
         self.debug_stream(str(self.__limitL))
-        self.debug_stream(str(self.__limitR))
-        
+        self.__limitR = self.motor_right.hw_limit_minus
+        self.debug_stream(str(self.__limitR))        
         
         if self.__limitL and self.__limitR:
             self.stop_all()
-            self.warn_stream('Both limit_switches are active! Something is broken! Init or start_all to continue.')
-            self.set_state(DevState.FAULT)
-        
+            self.warn_stream('Both limit_switches are active!'
+                             'Something is broken! Init or start_all to continue.')
+            self.set_state(DevState.FAULT)        
         
         else:
             if self.get_state() == DevState.MOVING:
@@ -216,45 +202,28 @@ class DebrisTape(Device):
                     self.__loops += 1
                     if self.__autoReverse:
                         self.__direction = not self.__direction
-                        
-                        #t2 = time.time()
-                        #print("current round trips: {:d} "
-                        #      "with duration {:f} min".format(self.round_trips, (t2-t1)/60))
-                        #t1 = t2
                         self.start_all()
                     else:
                         self.stop_all()
                         self.set_state(DevState.ALARM)
                         
-    @command(polling_period = 10000)
+    @command() #polling_period = 10000)
     def monitor_temperature(self):
         try:
             self.__motorR_temperature  = W1ThermSensor(40, "3c01d607b685").get_temperature()
             self.debug_stream(str(self.__motorR_temperature))
         except:
             self.__motorR_temperature  = 0
-            self.debug_stream('Could not get temperature of right motor.')
-            
-            
-        try:
-            self.__motorD_temperature  = W1ThermSensor(40, "3c01d6077e70").get_temperature()
-            self.debug_stream(str(self.__motorD_temperature))
-        except:
-            self.__motorD_temperature  = 0
-            self.debug_stream('Could not get temperature of driver motor.')
-            
-            
+            self.debug_stream('Could not get temperature of right motor.')          
         try:
             self.__motorL_temperature  = W1ThermSensor(40, '3c01d6072740').get_temperature()
             self.debug_stream(str(self.__motorL_temperature))
         except:
             self.__motorL_temperature  = 0
-            self.debug_stream('Could not get temperature of left motor.')
-            
+            self.debug_stream('Could not get temperature of left motor.')            
             
         if self.__motorR_temperature > 40 or self.__motorD_temperature > 40 or self.__motorL_temperature > 40:
             self.set_state(DevState.ALARM)
-
 
     @command()
     def clear_state(self):
@@ -269,4 +238,3 @@ class DebrisTape(Device):
         
 if __name__ == "__main__":
     DebrisTape.run_server()
-
