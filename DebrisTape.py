@@ -259,6 +259,12 @@ class DebrisTape(Device):
     @command()
     def clear_state(self):
         self.set_state(DevState.ON)
+
+
+    @command()
+    def new_tape_inserted(self):
+        if
+
         
         
 if __name__ == "__main__":
