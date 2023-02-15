@@ -15,6 +15,19 @@ class DebrisTape(Device):
     MotorRDevice = device_property(
         dtype="str", default_value="/domain/family/member"
     )
+    #Properties for Tape trackin
+    Thickness_in_um = device_property(
+        dtype = 'int16',
+        default_value= 50
+    )
+    Inner_radius_in_mm = device_property(
+        dtype ='int16',
+        default_value= 15
+    )
+    Outer_radius_in_mm = device_property(
+        dtype ='int16',
+        default_value= 60
+    )
     
     # device attributes
    
@@ -80,6 +93,12 @@ class DebrisTape(Device):
         memorized=True,
         hw_memorized=True,
     )
+    tape_progress = attribute(
+        dtype = float,
+        label = 'Tape progrss in Percent',
+        access =AttrWriteType.READ,
+
+    )
 
     __limitR = False
     __limitL = False
@@ -104,9 +123,18 @@ class DebrisTape(Device):
         except:
             self.error_stream('Could not connect to Motor Devices: {:s}'.format(self.MotorRDevice))
             self.set_state(DevState.FAULT)
-        
+        self._tape_zero_progress = 0
         self.stop_all()
-        self.__loops = 0
+        self.db = Database()
+        temp = self.db.get_device_property(self.get_name(), ["loops"])
+        if temp != {}:
+            self.__loops = temp["loops"] # sets loops to remembered value
+        else:
+            self.__loops = 0
+            self.remember_loops()
+        temp_turns=1000*(self.Outer_radius_in_mm-self.Inner_radius_in_mm)/(self.Thickness_in_um)
+        self.length_of_tape= (2*3.14*self.Outer_radius_in_mm*temp_turns-3.14*self.Thickness_in_um/1000*temp_turns**2)
+
     
     
     def delete_device(self):
@@ -144,6 +172,7 @@ class DebrisTape(Device):
     @command
     def reset_loops(self):
         self.__loops = 0
+        self.remember_loops()
     
     # Attribute read/write methods
     def read_limitL(self):
@@ -178,10 +207,22 @@ class DebrisTape(Device):
         self.__autoReverse = value
         
     def read_velocity(self):
-        return self.__velocity
+        return self.motor_left.read_velocity()
     
     def write_velocity(self, value):
         self.__velocity = value
+        self.motor_left.write_velocity(value)
+        self.motor_right.write_velocity(value)
+
+    @command(polling_period = 1000)
+    def read_tape_progress(self):
+        if self.__direction:
+            temp_rot = self.motor_left.read_position()
+        else:
+            temp_rot = self.motor_right.read_position()
+        
+        current_no_turns = abs(temp_rot-self._tape_zero_progress)/360
+        return 100*(2*3.14*self.Outer_radius_in_mm*current_no_turns-3.14*self.Thickness_in_um/1000*current_no_turns**2)/self.length_of_tape
     
     @command(polling_period = 500)
     def monitor_switches(self):        
@@ -198,11 +239,16 @@ class DebrisTape(Device):
         
         else:
             if self.get_state() == DevState.MOVING:
-                if (self.__direction and self.__limitL) or (not self.__direction and self.__limitR):
+                if (self.__direction and self.__limitL) or (not self.__direction and self.__limitR): # tape at limit
                     self.__loops += 1
+                    self._tape_zero_progress = 0
+                    self.remember_loops()
                     if self.__autoReverse:
+                        self.tensioning()
                         self.__direction = not self.__direction
+                        self.tensioning()
                         self.start_all()
+                        
                     else:
                         self.stop_all()
                         self.set_state(DevState.ALARM)
@@ -233,6 +279,41 @@ class DebrisTape(Device):
     @command()
     def new_tape_inserted(self):
         self.__loops = 0
+        self.remember_loops()
+        if self.__limitL:
+            self._tape_zero_progress = self.motor_left.read_position()
+        elif self.__limitR:
+            self._tape_zero_progress = self.motor_left.read_position()
+        else:
+            self.debug_stream('Tape is not wound up enought')
+            self.set_status('Tape is not wound up enought')
+            self.set_state(DevState.ALARM)
+
+    def tensioning(self):
+        self.set_state(DevState.MOVING)
+        if self.__direction: # Right => Left
+            self.motor_right.write_hold_current(1)
+            self.motor_right.stop()
+            self.motor_left.velocity = 1
+            self.motor_left.jog_plus()
+            delay(500)
+            self.motor_right.write_hold_current(0)
+            self.motor_left.velocity = self.__velocity
+        else: # Left => Right
+            self.motor_left.write_hold_current(1)
+            self.motor_left.stop()
+            self.motor_right.velocity = 1
+            self.motor_right.jog_minus()
+            delay(500)
+            self.motor_left.write_hold_current(0)
+            self.motor_right.velocity = self.__velocity
+
+    def remember_loops(self):
+        self.db.put_device_property(self.get_name(), {"Loops": self.__loops})
+
+    def track_tape(self):
+        #TODO memorize Tape Progress
+
 
         
         
