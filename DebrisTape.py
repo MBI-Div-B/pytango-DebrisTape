@@ -97,6 +97,7 @@ class DebrisTape(Device):
         dtype = float,
         label = 'Tape progrss in Percent',
         access =AttrWriteType.READ,
+        unit = '%'
 
     )
 
@@ -223,6 +224,7 @@ class DebrisTape(Device):
         
         current_no_turns = abs(temp_rot-self._tape_zero_progress)/360
         return 100*(2*3.14*self.Outer_radius_in_mm*current_no_turns-3.14*self.Thickness_in_um/1000*current_no_turns**2)/self.length_of_tape
+        #TODO speed adjust
     
     @command(polling_period = 500)
     def monitor_switches(self):        
