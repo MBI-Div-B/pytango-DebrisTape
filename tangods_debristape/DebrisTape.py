@@ -2,12 +2,17 @@ from tango import Database, DevFailed, AttrWriteType, DevState, DeviceProxy, Dis
 from tango.server import device_property
 from tango.server import Device, attribute, command
 import time
+from enum import IntEnum
 from w1thermsensor import W1ThermSensor  # Easy use of 1-Wire temperature sensors
 import math
 
 
 # ======================================================
 class DebrisTape(Device):
+    class Direction(IntEnum):
+        LEFT_TO_RIGHT = 0
+        RIGHT_TO_LEFT = 1
+
     MotorLDevice = device_property(dtype="str", default_value="domain/family/member")
 
     MotorRDevice = device_property(dtype="str", default_value="domain/family/member")
@@ -63,8 +68,8 @@ class DebrisTape(Device):
     )
 
     direction = attribute(
-        dtype="bool",
-        label="Direction. 0:L=>R, 1:R=>L",
+        dtype=Direction,
+        label="Direction",
         access=AttrWriteType.READ_WRITE,
         display_level=DispLevel.EXPERT,
         memorized=True,
@@ -210,9 +215,12 @@ class DebrisTape(Device):
         return self.__loops
 
     def read_direction(self):
-        return self.__direction
+        # from 0/1 to enum
+        return self.Direction(self.__direction)
 
     def write_direction(self, value):
+        # from enum to 0/1
+        value = value.value
         if value != self.__direction:
             # only relevant for motor step position
             if value:
