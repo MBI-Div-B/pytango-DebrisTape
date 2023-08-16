@@ -1,4 +1,3 @@
-#!/usr/bin/python3 -u
 from tango import Database, DevFailed, AttrWriteType, DevState, DeviceProxy, DispLevel
 from tango.server import device_property
 from tango.server import Device, attribute, command
@@ -9,14 +8,23 @@ import math
 
 # ======================================================
 class DebrisTape(Device):
-    MotorLDevice = device_property(dtype="str", default_value="/domain/family/member")
+    MotorLDevice = device_property(dtype="str", default_value="domain/family/member")
 
-    MotorRDevice = device_property(dtype="str", default_value="/domain/family/member")
-    # Properties for Tape trackin
+    MotorRDevice = device_property(dtype="str", default_value="domain/family/member")
+    # Properties for Tape tracking
     Thickness_in_um = device_property(dtype="int16", default_value=50)
     Inner_radius_in_mm = device_property(dtype="int16", default_value=15)
     Outer_radius_in_mm = device_property(dtype="int16", default_value=60)
-
+    motor_left_jog_direction = device_property(
+        dtype=bool,
+        default_value=True,
+        doc="True - plus direction, False - minus. Depends on motor orientation. For spec beamline needs to be false, for scattering - true",
+    )
+    motor_right_jog_direction = device_property(
+        dtype=bool,
+        default_value=False,
+        doc="True - plus direction, False - minus. Depends on motor orientation. Must be false for both of beamlines.",
+    )
     # device attributes
 
     limitL = attribute(
@@ -81,7 +89,7 @@ class DebrisTape(Device):
     )
     tape_progress = attribute(
         dtype=float,
-        label="Tape progrss in Percent",
+        label="Tape progress in percent",
         access=AttrWriteType.READ,
         unit="%",
     )
@@ -133,8 +141,8 @@ class DebrisTape(Device):
             / (self.Thickness_in_um)
         )
         self.length_of_tape = (
-            2 * 3.14 * self.Outer_radius_in_mm * self.tot_turns
-            - 3.14 * self.Thickness_in_um / 1000 * self.tot_turns**2
+            2 * math.pi * self.Outer_radius_in_mm * self.tot_turns
+            - math.pi * self.Thickness_in_um / 1000 * self.tot_turns**2
         )
         self.last_pos = 0
         self.__direction = True
@@ -148,21 +156,31 @@ class DebrisTape(Device):
     def start_all(self):
         """Direction ==>  0:L=>R, 1:R=>L
 
+        depends on the setup the motors can pull with either positive or negative jog
 
+        for scattering beamline:
         motor_left pulls with positive jog
         motor_right pulls with negative jog
 
+        for spectroscopy beamline:
+        motor_left pulls with negative jog
+        motor_right pulls with negative jog
         # for driver motor:
             # positive throttle = move in positive direction
         """
         self.set_state(DevState.MOVING)
         if self.__direction:  # Right => Left
             self.motor_right.stop()
-            self.motor_left.jog_plus()
-            pass
+            if self.motor_left_jog_direction:
+                self.motor_left.jog_plus()
+            else:
+                self.motor_left.jog_minus()
         else:  # Left => Right
             self.motor_left.stop()
-            self.motor_right.jog_minus()
+            if self.motor_right_jog_direction:
+                self.motor_right.jog_plus()
+            else:
+                self.motor_right.jog_minus()
 
     @command
     def stop_all(self):
@@ -247,14 +265,14 @@ class DebrisTape(Device):
 
     def tape_length(self, turns):
         return (
-            2 * 3.14 * self.Inner_radius_in_mm * turns
-            + 3.14 * self.Thickness_in_um / 1000 * turns**2
+            2 * math.pi * self.Inner_radius_in_mm * turns
+            + math.pi * self.Thickness_in_um / 1000 * turns**2
         )
 
     def tape_turns(self, length):
         # self.debug_stream()
-        a = 2 * 3.14 * self.Inner_radius_in_mm
-        b = 3.14 * self.Thickness_in_um / 1000
+        a = 2 * math.pi * self.Inner_radius_in_mm
+        b = math.pi * self.Thickness_in_um / 1000
         self.debug_stream("c")
         self.debug_stream(str(a**2 + 4 * b * length))
         self.debug_stream(str((-a + math.sqrt(a**2 + 4 * b * length)) / (2 * b)))
@@ -398,7 +416,6 @@ class DebrisTape(Device):
 
     def track_tape(self):
         # TODO memorize Tape Progress
-
         pass
 
 

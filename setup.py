@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="tangods_debristape",
-    version="0.0.1",
+    version="0.0.2",
     description="Tango device for DebrisTape",
     author="Daniel Schick",
     author_email="dschick@mbi-berlin.de",
