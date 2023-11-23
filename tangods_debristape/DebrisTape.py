@@ -6,12 +6,13 @@ from enum import IntEnum
 from w1thermsensor import W1ThermSensor  # Easy use of 1-Wire temperature sensors
 import math
 
+class Direction(IntEnum):
+    LEFT_TO_RIGHT = 0
+    RIGHT_TO_LEFT = 1
 
 # ======================================================
 class DebrisTape(Device):
-    class Direction(IntEnum):
-        LEFT_TO_RIGHT = 0
-        RIGHT_TO_LEFT = 1
+
 
     MotorLDevice = device_property(dtype="str", default_value="domain/family/member")
 
@@ -57,7 +58,6 @@ class DebrisTape(Device):
         dtype=Direction,
         label="Direction",
         access=AttrWriteType.READ_WRITE,
-        display_level=DispLevel.EXPERT,
         memorized=True,
         hw_memorized=True,
     )
@@ -265,16 +265,17 @@ class DebrisTape(Device):
                 "Something is broken! Init or start_all to continue."
             )
             self.set_state(DevState.FAULT)
-
         else:
             if self.get_state() == DevState.MOVING:
-                if (self.__direction != Direction.RIGHT_TO_LEFT and self.__limitL) or (
-                    self.__direction != Direction.LEFT_TO_RIGHT and self.__limitR
+                if (self.__direction == Direction.RIGHT_TO_LEFT and self.__limitL) or (
+                    self.__direction == Direction.LEFT_TO_RIGHT and self.__limitR
                 ):  # tape at limit
+                    self.stop_all()
                     self.__loops += 1
                     self.remember_loops()
-                    self.stop_all()
                     self.set_state(DevState.ALARM)
+
+                    
 
     @command()
     def clear_state(self):
