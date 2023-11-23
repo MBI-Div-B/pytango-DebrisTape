@@ -122,7 +122,7 @@ class DebrisTape(Device):
             - math.pi * self.Thickness_in_um / 1000 * self.tot_turns**2
         )
         self.last_pos = 0
-        self.__direction = True
+        self.__direction = Direction.LEFT_TO_RIGHT
         self.last_no_turns = 0
 
     def delete_device(self):
@@ -146,13 +146,13 @@ class DebrisTape(Device):
             # positive throttle = move in positive direction
         """
         self.set_state(DevState.MOVING)
-        if self.__direction:  # Right => Left
+        if self.__direction == Direction.RIGHT_TO_LEFT:  # Right => Left
             self.motor_right.stop()
             if self.motor_left_jog_direction:
                 self.motor_left.jog_plus()
             else:
                 self.motor_left.jog_minus()
-        else:  # Left => Right
+        elif self.__direction == Direction.LEFT_TO_RIGHT:  # Left => Right
             self.motor_left.stop()
             if self.motor_right_jog_direction:
                 self.motor_right.jog_plus()
@@ -182,11 +182,11 @@ class DebrisTape(Device):
 
     def read_direction(self):
         # from 0/1 to enum
-        return self.Direction(self.__direction)
+        return self.__direction
 
     def write_direction(self, value):
         # from enum to 0/1
-        value = value.value
+        value = Direction(value)
         if value != self.__direction:
             # only relevant for motor step position
             if value:
@@ -209,12 +209,6 @@ class DebrisTape(Device):
         else:
             self.__direction = value
 
-    def read_autoReverse(self):
-        return self.__autoReverse
-
-    def write_autoReverse(self, value):
-        self.__autoReverse = value
-
     def read_velocity(self):
         self.__velocity = self.motor_left.velocity
         return self.__velocity
@@ -226,7 +220,7 @@ class DebrisTape(Device):
 
     @command(polling_period=1000)
     def read_tape_progress(self):
-        if self.__direction:
+        if self.__direction == Direction.RIGHT_TO_LEFT:
             temp_rot = self.motor_left.position
         else:
             temp_rot = self.motor_right.position
@@ -274,8 +268,8 @@ class DebrisTape(Device):
 
         else:
             if self.get_state() == DevState.MOVING:
-                if (self.__direction and self.__limitL) or (
-                    not self.__direction and self.__limitR
+                if (self.__direction != Direction.RIGHT_TO_LEFT and self.__limitL) or (
+                    self.__direction != Direction.LEFT_TO_RIGHT and self.__limitR
                 ):  # tape at limit
                     self.__loops += 1
                     self.remember_loops()
