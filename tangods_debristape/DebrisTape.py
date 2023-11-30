@@ -6,14 +6,14 @@ from enum import IntEnum
 from w1thermsensor import W1ThermSensor  # Easy use of 1-Wire temperature sensors
 import math
 
+
 class Direction(IntEnum):
     LEFT_TO_RIGHT = 0
     RIGHT_TO_LEFT = 1
 
+
 # ======================================================
 class DebrisTape(Device):
-
-
     MotorLDevice = device_property(dtype="str", default_value="domain/family/member")
 
     MotorRDevice = device_property(dtype="str", default_value="domain/family/member")
@@ -46,7 +46,10 @@ class DebrisTape(Device):
         access=AttrWriteType.READ,
         display_level=DispLevel.OPERATOR,
     )
-
+    loops_left = attribute(
+        dtype=float,
+        label="loops left on the current (moving) roll",
+    )
     loops = attribute(
         dtype="int",
         label="Loops since reset / restart",
@@ -81,7 +84,6 @@ class DebrisTape(Device):
         super().init_device()
         self.info_stream("init_device()")
 
-
         self.__limitR = False
         self.__limitL = False
 
@@ -108,22 +110,26 @@ class DebrisTape(Device):
             self.set_state(DevState.FAULT)
 
         self.stop_all()
-        self.db = Database()
-        temp = self.db.get_device_property(self.get_name(), ["loops"])
-        self.__loops = temp
+        # total loops on the full roll of tape, calculated once and is a constant
+        self.FULL_TAPE_LOOPS = (self.Outer_radius_in_mm - self.Inner_radius_in_mm) / (
+            self.Thickness_in_um / 1000
+        )
 
-        self.tot_turns = (
-            1000
-            * (self.Outer_radius_in_mm - self.Inner_radius_in_mm)
-            / (self.Thickness_in_um)
+        self.db = Database()
+        """
+        instead of converting length and loops back in forth and
+        accumlate the error we would rather "think" in terms of loops
+        the single conversion from length to loops is needed when
+        new tape is inserted
+        moreover, this is basically a constant value dependent only
+        on properties as thikness, inner and outer radius
+        """
+        saved_loops_left = self.db.get_device_property(self.get_name(), ["loops_left"])
+        self._loops_left = saved_loops_left
+        self.reset_previous_motor_positions()
+        self.__direction = Direction(
+            self.db.get_device_property(self.get_name(), ["direction"])
         )
-        self.length_of_tape = (
-            2 * math.pi * self.Outer_radius_in_mm * self.tot_turns
-            - math.pi * self.Thickness_in_um / 1000 * self.tot_turns**2
-        )
-        self.last_pos = 0
-        self.__direction = Direction.LEFT_TO_RIGHT
-        self.last_no_turns = 0
 
     def delete_device(self):
         self.stop_all()
@@ -131,8 +137,7 @@ class DebrisTape(Device):
 
     @command
     def start_all(self):
-        """Direction ==>  0:L=>R, 1:R=>L
-
+        """
         depends on the setup the motors can pull with either positive or negative jog
 
         for scattering beamline:
@@ -146,13 +151,13 @@ class DebrisTape(Device):
             # positive throttle = move in positive direction
         """
         self.set_state(DevState.MOVING)
-        if self.__direction == Direction.RIGHT_TO_LEFT:  # Right => Left
+        if self.__direction == Direction.RIGHT_TO_LEFT:
             self.motor_right.stop()
             if self.motor_left_jog_direction:
                 self.motor_left.jog_plus()
             else:
                 self.motor_left.jog_minus()
-        elif self.__direction == Direction.LEFT_TO_RIGHT:  # Left => Right
+        elif self.__direction == Direction.LEFT_TO_RIGHT:
             self.motor_left.stop()
             if self.motor_right_jog_direction:
                 self.motor_right.jog_plus()
@@ -165,11 +170,6 @@ class DebrisTape(Device):
         self.motor_left.stop()
         self.motor_right.stop()
 
-    @command
-    def reset_loops(self):
-        self.__loops = 0
-        self.remember_loops()
-
     # Attribute read/write methods
     def read_limitL(self):
         return self.__limitL
@@ -177,37 +177,29 @@ class DebrisTape(Device):
     def read_limitR(self):
         return self.__limitR
 
-    def read_loops(self):
-        return self.__loops
+    def read_loops_left(self):
+        return self._loops_left
+
+    # loops left cannot be less then 0 and greater then self.FULL_TAPE_LOOPS
+    def write_loops_left(self, value):
+        self._loops_left = min(max(0, value), self.FULL_TAPE_LOOPS)
 
     def read_direction(self):
-        # from 0/1 to enum
         return self.__direction
 
     def write_direction(self, value):
-        # from enum to 0/1
+        # conversion from tango's 0/1 to enum
         value = Direction(value)
+        # if direction is being changed
         if value != self.__direction:
-            # only relevant for motor step position
-            if value:
-                self.motor_left.set_position(
-                    self.tape_turns(
-                        self.length_of_tape * (100 - self.read_tape_progress()) / 100
-                    )
-                    * 360
-                )
-            else:
-                self.motor_right.set_position(
-                    self.tape_turns(
-                        self.length_of_tape * (100 - self.read_tape_progress()) / 100
-                    )
-                    * -360
-                )
-        if self.get_state() == DevState.MOVING:
+            # "inverting" the loops left
+            was_moving = self.get_state() == DevState.MOVING
+            self.stop_all()
             self.__direction = value
-            self.start_all()
-        else:
-            self.__direction = value
+            self.write_loops_left(self.FULL_TAPE_LOOPS - self.read_loops_left())
+            if was_moving:
+                self.start_all()
+            self.dump_to_db()
 
     def read_velocity(self):
         self.__velocity = self.motor_left.velocity
@@ -220,40 +212,48 @@ class DebrisTape(Device):
 
     @command(polling_period=1000)
     def read_tape_progress(self):
-        if self.__direction == Direction.RIGHT_TO_LEFT:
-            temp_rot = self.motor_left.position
-        else:
-            temp_rot = self.motor_right.position
-        # = self.motor_right.position+self.motor_left.position #because L increases and R decreases while running
+        if self.get_state() == DevState.MOVING:
+            # position from phytron is given in degrees
+            motor_left_new_position = self.motor_left.position
+            motor_right_new_position = self.motor_right.position
 
-        current_no_turns = abs(temp_rot) / 360 + self.last_no_turns
-        self.debug_stream(str(current_no_turns))
-        return 100 * (self.tape_length(current_no_turns) / self.length_of_tape)
-        # TODO speed adjust
+            if self.previous_motor_right_position is None:
+                self.previous_motor_right_position = motor_right_new_position
 
-    def tape_length(self, turns):
-        return (
-            2 * math.pi * self.Inner_radius_in_mm * turns
-            + math.pi * self.Thickness_in_um / 1000 * turns**2
-        )
+            if self.previous_motor_left_position is None:
+                self.previous_motor_left_position = motor_left_new_position
 
-    def tape_turns(self, length):
-        # self.debug_stream()
-        a = 2 * math.pi * self.Inner_radius_in_mm
-        b = math.pi * self.Thickness_in_um / 1000
-        self.debug_stream("c")
-        self.debug_stream(str(a**2 + 4 * b * length))
-        self.debug_stream(str((-a + math.sqrt(a**2 + 4 * b * length)) / (2 * b)))
-        return (-a + math.sqrt(a**2 + 4 * b * length)) / (2 * b)
+            motor_left_diff = abs(
+                self.previous_motor_left_position - motor_left_new_position
+            )
+            motor_right_diff = abs(
+                self.previous_motor_right_position - motor_right_new_position
+            )
+
+            # while only one of the motor is running we can just take the maximum
+            # value of the diffs
+            # actually, if we would have both motor running their change of position should be the same
+            degree_diff = max(motor_left_diff, motor_right_diff)
+            # in loops from degrees
+            loops_diff = degree_diff / 360
+            # decreasing the loops left
+            self.write_loops_left(self.read_loops_left() - loops_diff)
+            # 100% tape progress corresponds to 0 loops left
+            # 0% tape progress coreesponds to self.FULL_TAPE_LOOPS (see const) loops left
+            # the self.read_loops_left garantues that the boundaries above hold
+            self._tape_progress = (
+                1 - self.read_loops_left() / self.FULL_TAPE_LOOPS
+            ) * 100
+        return self._tape_progress
 
     @command(polling_period=1000)
     def monitor_switches(self):
-        if 'limit' in self.motor_left.Status():
+        if "limit" in self.motor_left.Status():
             self.__limitL = True
         else:
             self.__limitL = False
 
-        if 'limit' in self.motor_right.Status():
+        if "limit" in self.motor_right.Status():
             self.__limitR = True
         else:
             self.__limitR = False
@@ -271,11 +271,7 @@ class DebrisTape(Device):
                     self.__direction == Direction.LEFT_TO_RIGHT and self.__limitR
                 ):  # tape at limit
                     self.stop_all()
-                    self.__loops += 1
-                    self.remember_loops()
                     self.set_state(DevState.ALARM)
-
-                    
 
     @command()
     def clear_state(self):
@@ -283,25 +279,32 @@ class DebrisTape(Device):
 
     @command()
     def new_tape_inserted(self):
-        self.__loops = 0
-        self.remember_loops()
-
         if self.__limitL:
             self.motor_right.set_position(0)
-            self.motor_left.set_position(self.tot_turns)
-            self.write_direction(False)
+            self.motor_left.set_position(0)
+            self.reset_previous_motor_positions()
+            self.write_direction(Direction.LEFT_TO_RIGHT)
         elif self.__limitR:
             self.motor_left.set_position(0)
-            self.motor_right.set_position(self.tot_turns)
-            self.write_direction(True)
+            self.motor_right.set_position(0)
+            self.reset_previous_motor_positions()
+            self.write_direction(Direction.RIGHT_TO_LEFT)
         else:
             self.debug_stream("Tape is not wound up enough")
             self.set_status("Tape is not wound up enough")
             self.set_state(DevState.ALARM)
-        self.last_no_turns = 0
 
-    def remember_loops(self):
-        self.db.put_device_property(self.get_name(), {"Loops": self.__loops})
+    def reset_previous_motor_positions(self):
+        self.previous_motor_right_position = None
+        self.previous_motor_left_position = None
+
+    def dump_to_db(self):
+        self.db.put_device_property(
+            self.get_name(), {"loops_left": self.read_loops_left()}
+        )
+        self.db.put_device_property(
+            self.get_name(), {"direction": self.read_direction()}
+        )
 
 
 if __name__ == "__main__":
