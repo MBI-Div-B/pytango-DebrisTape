@@ -3,7 +3,8 @@ from tango.server import device_property
 from tango.server import Device, attribute, command
 import time
 from enum import IntEnum
-from w1thermsensor import W1ThermSensor  # Easy use of 1-Wire temperature sensors
+
+# from w1thermsensor import W1ThermSensor  # Easy use of 1-Wire temperature sensors
 import math
 
 
@@ -49,12 +50,6 @@ class DebrisTape(Device):
     loops_left = attribute(
         dtype=float,
         label="loops left on the current (moving) roll",
-    )
-    loops = attribute(
-        dtype="int",
-        label="Loops since reset / restart",
-        access=AttrWriteType.READ,
-        display_level=DispLevel.OPERATOR,
     )
 
     direction = attribute(
@@ -127,9 +122,7 @@ class DebrisTape(Device):
         saved_loops_left = self.db.get_device_property(self.get_name(), ["loops_left"])
         self._loops_left = saved_loops_left
         self.reset_previous_motor_positions()
-        self.__direction = Direction(
-            self.db.get_device_property(self.get_name(), ["direction"])
-        )
+        self.__direction = None
 
     def delete_device(self):
         self.stop_all()
@@ -191,6 +184,8 @@ class DebrisTape(Device):
         # conversion from tango's 0/1 to enum
         value = Direction(value)
         # if direction is being changed
+        if self.__direction is None:
+            self.__direction = value
         if value != self.__direction:
             # "inverting" the loops left
             was_moving = self.get_state() == DevState.MOVING
@@ -199,7 +194,6 @@ class DebrisTape(Device):
             self.write_loops_left(self.FULL_TAPE_LOOPS - self.read_loops_left())
             if was_moving:
                 self.start_all()
-            self.dump_to_db()
 
     def read_velocity(self):
         self.__velocity = self.motor_left.velocity
@@ -298,12 +292,13 @@ class DebrisTape(Device):
         self.previous_motor_right_position = None
         self.previous_motor_left_position = None
 
+    def delete_device(self):
+        super().delete_device()
+        self.dump_to_db()
+
     def dump_to_db(self):
         self.db.put_device_property(
             self.get_name(), {"loops_left": self.read_loops_left()}
-        )
-        self.db.put_device_property(
-            self.get_name(), {"direction": self.read_direction()}
         )
 
 
