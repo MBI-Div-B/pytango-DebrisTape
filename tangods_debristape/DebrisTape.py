@@ -16,7 +16,7 @@ class Direction(IntEnum):
 # ======================================================
 class DebrisTape(Device):
     MotorLDevice = device_property(dtype="str", default_value="domain/family/member")
-
+    LoopsLeft = device_property(float)
     MotorRDevice = device_property(dtype="str", default_value="domain/family/member")
     # Properties for Tape tracking
     Thickness_in_um = device_property(dtype="int16", default_value=50)
@@ -50,6 +50,7 @@ class DebrisTape(Device):
     loops_left = attribute(
         dtype=float,
         label="loops left on the current (moving) roll",
+        access=AttrWriteType.READ_WRITE,
     )
 
     direction = attribute(
@@ -61,8 +62,9 @@ class DebrisTape(Device):
     )
 
     velocity = attribute(
-        dtype=int,
+        dtype=float,
         label="Velocity",
+        format=".2f",
         access=AttrWriteType.READ_WRITE,
         display_level=DispLevel.EXPERT,
         unit="Hz",
@@ -70,8 +72,17 @@ class DebrisTape(Device):
     tape_progress = attribute(
         dtype=float,
         label="Tape progress in percent",
-        access=AttrWriteType.READ,
+        access=AttrWriteType.READ_WRITE,
+        polling_period=1000,
         unit="%",
+        memorized=True,
+        hw_memorized=True,
+    )
+    full_tapes_loops = attribute(
+        dtype=float,
+        label="calculated loops based on radius",
+        display_level=DispLevel.EXPERT,
+        access=AttrWriteType.READ,
     )
 
     def init_device(self):
@@ -81,7 +92,7 @@ class DebrisTape(Device):
 
         self.__limitR = False
         self.__limitL = False
-
+        self.__velocity = None
         try:
             self.motor_left = DeviceProxy(self.MotorLDevice)
             self.info_stream(
@@ -103,14 +114,15 @@ class DebrisTape(Device):
                 "Could not connect to Motor Devices: {:s}".format(self.MotorRDevice)
             )
             self.set_state(DevState.FAULT)
-
-        self.stop_all()
         # total loops on the full roll of tape, calculated once and is a constant
+        self.db = Database()
         self.FULL_TAPE_LOOPS = (self.Outer_radius_in_mm - self.Inner_radius_in_mm) / (
             self.Thickness_in_um / 1000
         )
+        self.stop_all()
+        self.write_loops_left(self.LoopsLeft)
+        
 
-        self.db = Database()
         """
         instead of converting length and loops back in forth and
         accumlate the error we would rather "think" in terms of loops
@@ -119,8 +131,6 @@ class DebrisTape(Device):
         moreover, this is basically a constant value dependent only
         on properties as thikness, inner and outer radius
         """
-        saved_loops_left = self.db.get_device_property(self.get_name(), ["loops_left"])
-        self._loops_left = saved_loops_left
         self.reset_previous_motor_positions()
         self.__direction = None
 
@@ -172,10 +182,14 @@ class DebrisTape(Device):
 
     def read_loops_left(self):
         return self._loops_left
+    
+    def read_full_tapes_loops(self):
+        return self.FULL_TAPE_LOOPS
 
     # loops left cannot be less then 0 and greater then self.FULL_TAPE_LOOPS
     def write_loops_left(self, value):
         self._loops_left = min(max(0, value), self.FULL_TAPE_LOOPS)
+        self.db.put_device_property(self.get_name(), {"LoopsLeft": self._loops_left})
 
     def read_direction(self):
         return self.__direction
@@ -204,8 +218,15 @@ class DebrisTape(Device):
         self.motor_left.velocity = value
         self.motor_right.velocity = value
 
-    @command(polling_period=1000)
     def read_tape_progress(self):
+        self.write_tape_progress((1 - self.read_loops_left() / self.FULL_TAPE_LOOPS) * 100)
+        return self._tape_progress
+
+    def write_tape_progress(self, value):
+        self._tape_progress = value
+
+    @command(polling_period=1000)
+    def update_tape_progress(self):
         if self.get_state() == DevState.MOVING:
             # position from phytron is given in degrees
             motor_left_new_position = self.motor_left.position
@@ -223,7 +244,8 @@ class DebrisTape(Device):
             motor_right_diff = abs(
                 self.previous_motor_right_position - motor_right_new_position
             )
-
+            self.previous_motor_left_position = self.motor_left.position
+            self.previous_motor_right_position = self.motor_right.position
             # while only one of the motor is running we can just take the maximum
             # value of the diffs
             # actually, if we would have both motor running their change of position should be the same
@@ -235,10 +257,6 @@ class DebrisTape(Device):
             # 100% tape progress corresponds to 0 loops left
             # 0% tape progress coreesponds to self.FULL_TAPE_LOOPS (see const) loops left
             # the self.read_loops_left garantues that the boundaries above hold
-            self._tape_progress = (
-                1 - self.read_loops_left() / self.FULL_TAPE_LOOPS
-            ) * 100
-        return self._tape_progress
 
     @command(polling_period=1000)
     def monitor_switches(self):
@@ -293,13 +311,7 @@ class DebrisTape(Device):
         self.previous_motor_left_position = None
 
     def delete_device(self):
-        super().delete_device()
-        self.dump_to_db()
-
-    def dump_to_db(self):
-        self.db.put_device_property(
-            self.get_name(), {"loops_left": self.read_loops_left()}
-        )
+        super().delete_device()       
 
 
 if __name__ == "__main__":
