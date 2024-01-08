@@ -35,14 +35,14 @@ class DebrisTape(Device):
     # device attributes
 
     limitL = attribute(
-        dtype="bool",
+        dtype=bool,
         label="Limit left",
         access=AttrWriteType.READ,
         display_level=DispLevel.OPERATOR,
     )
 
     limitR = attribute(
-        dtype="bool",
+        dtype=bool,
         label="Limit right",
         access=AttrWriteType.READ,
         display_level=DispLevel.OPERATOR,
@@ -61,7 +61,7 @@ class DebrisTape(Device):
     )
 
     velocity = attribute(
-        dtype="int",
+        dtype=int,
         label="Velocity",
         access=AttrWriteType.READ_WRITE,
         display_level=DispLevel.EXPERT,
